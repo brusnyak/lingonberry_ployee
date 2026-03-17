@@ -20,13 +20,13 @@ ALLOWED_PATHS = [
 
 # Patterns that should never appear in agent output
 _SECRET_PATTERNS = [
-    r"sk-[a-zA-Z0-9\-_]{20,}",          # OpenAI / OpenRouter keys
-    r"AIza[a-zA-Z0-9\-_]{35}",           # Google API keys
-    r"hf_[a-zA-Z0-9]{20,}",              # HuggingFace
-    r"[a-f0-9]{32}\.[a-zA-Z0-9_\-]{10,}",# Ollama-style keys
-    r"(?i)(password|secret|token)\s*=\s*\S+",
+    r"sk-[a-zA-Z0-9\-_]{20,}",            # OpenAI / OpenRouter keys
+    r"AIza[a-zA-Z0-9\-_]{35}",            # Google API keys
+    r"hf_[a-zA-Z0-9]{20,}",               # HuggingFace
+    r"[a-f0-9]{32}\.[a-zA-Z0-9_\-]{10,}", # Ollama-style keys
+    r"(?:password|secret|token)\s*=\s*\S+",
 ]
-_SECRET_RE = re.compile("|".join(_SECRET_PATTERNS))
+_SECRET_RE = re.compile("|".join(_SECRET_PATTERNS), re.IGNORECASE)
 
 
 def is_allowed_path(path: str | Path) -> bool:

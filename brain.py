@@ -22,6 +22,14 @@ PROJECT_MD = (BIZ_ROOT / "PROJECT.md").read_text()
 
 _client = None
 
+FREE_MODELS = [
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "mistralai/mistral-small-3.1-24b-instruct:free",
+    "google/gemma-3-27b-it:free",
+    "nousresearch/hermes-3-llama-3.1-405b:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+]
+
 def _llm() -> OpenAI:
     global _client
     if _client is None:
@@ -30,6 +38,21 @@ def _llm() -> OpenAI:
             api_key=os.environ["OPENROUTER_API_KEY"],
         )
     return _client
+
+
+def _chat(messages: list, tools: list = None) -> object:
+    """Try free models in order until one responds."""
+    import openai as _openai
+    kwargs = dict(messages=messages, temperature=0.3, max_tokens=2000)
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = "auto"
+    for model in FREE_MODELS:
+        try:
+            return _llm().chat.completions.create(model=model, **kwargs)
+        except (_openai.RateLimitError, _openai.NotFoundError):
+            continue
+    raise RuntimeError("All free models rate-limited or unavailable.")
 
 
 # ── Tool definitions ──────────────────────────────────────────────────────────
@@ -279,14 +302,7 @@ def ask(user_message: str, max_tool_rounds: int = 8) -> str:
     messages.append({"role": "user", "content": user_message})
 
     for _ in range(max_tool_rounds):
-        resp = _llm().chat.completions.create(
-            model="google/gemini-2.5-pro-exp-03-25:free",
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-            temperature=0.3,
-            max_tokens=2000,
-        )
+        resp = _chat(messages, tools=TOOLS)
         msg = resp.choices[0].message
 
         if not msg.tool_calls:
