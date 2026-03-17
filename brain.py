@@ -20,7 +20,14 @@ from tools import web, git, leads, outreach
 BIZ_ROOT = Path(__file__).parent.parent
 PROJECT_MD = (BIZ_ROOT / "PROJECT.md").read_text()
 
+# Compact summary injected into every prompt — full file available via read_file tool
+_PROJECT_SUMMARY = "\n".join(
+    line for line in PROJECT_MD.splitlines()
+    if line.strip() and not line.startswith("```") and len(line) < 200
+)[:2000]  # cap at 2000 chars
+
 _client = None
+_ollama_client = None
 
 
 def _llm() -> OpenAI:
@@ -33,24 +40,45 @@ def _llm() -> OpenAI:
     return _client
 
 
+def _ollama() -> OpenAI:
+    global _ollama_client
+    if _ollama_client is None:
+        # Ollama cloud redirects api.ollama.com → ollama.com, use direct URL
+        _ollama_client = OpenAI(
+            base_url="https://ollama.com/v1",
+            api_key=os.environ.get("OLLAMA_API_KEY", ""),
+        )
+    return _ollama_client
+
+
+# Ollama cloud models — confirmed working with tool use
+OLLAMA_MODELS = [
+    "qwen3-next:80b",      # 80b, tool use confirmed
+    "nemotron-3-super",    # strong reasoning
+    "gemma3:12b",          # reliable fallback
+    "ministral-3:8b",      # fast, lightweight
+]
+
 FREE_MODELS = [
-    # 262k ctx, tool use — best option, try first
+    # 262k ctx, tool use — primary
     "qwen/qwen3-next-80b-a3b-instruct:free",
-    # 262k ctx, tool use — Nemotron super, your 35B active params pick
+    # 262k ctx, tool use — Nemotron super
     "nvidia/nemotron-3-super-120b-a12b:free",
-    # 256k ctx, tool use — step flash, fast
-    "stepfun/step-3.5-flash:free",
-    # 128k ctx, tool use — reliable fallback
+    # 131k ctx, tool use
+    "openai/gpt-oss-120b:free",
+    # 128k ctx, tool use — reliable
     "meta-llama/llama-3.3-70b-instruct:free",
     # 128k ctx, tool use
     "mistralai/mistral-small-3.1-24b-instruct:free",
-    # 131k ctx, tool use
-    "openai/gpt-oss-120b:free",
+    # 128k ctx — extra fallbacks
+    "google/gemma-3-27b-it:free",
+    "nousresearch/hermes-3-llama-3.1-405b:free",
+    "openai/gpt-oss-20b:free",
 ]
 
 
 def _chat(messages: list, tools: list = None) -> object:
-    """Try free models in order, with brief pause between attempts."""
+    """Try OpenRouter free models, then fall back to Ollama."""
     import time
     import openai as _openai
     kwargs = dict(messages=messages, temperature=0.3, max_tokens=2000)
@@ -59,16 +87,31 @@ def _chat(messages: list, tools: list = None) -> object:
         kwargs["tool_choice"] = "auto"
 
     last_err = None
+
+    # 1. Try OpenRouter free models
     for model in FREE_MODELS:
         try:
             return _llm().chat.completions.create(model=model, **kwargs)
-        except (_openai.RateLimitError, _openai.NotFoundError) as e:
+        except (_openai.RateLimitError, _openai.NotFoundError, _openai.BadRequestError, _openai.APIStatusError) as e:
             last_err = e
-            time.sleep(1)   # brief pause before trying next model
+            time.sleep(1)
             continue
         except Exception:
             raise
-    raise RuntimeError(f"All free models exhausted. Last error: {last_err}")
+
+    # 2. Fall back to Ollama
+    for model in OLLAMA_MODELS:
+        try:
+            return _ollama().chat.completions.create(model=model, **kwargs)
+        except (_openai.RateLimitError, _openai.NotFoundError, _openai.BadRequestError, _openai.APIStatusError) as e:
+            last_err = e
+            time.sleep(1)
+            continue
+        except Exception as e:
+            last_err = e
+            continue
+
+    raise RuntimeError(f"All models exhausted (OpenRouter + Ollama). Last error: {last_err}")
 
 
 # ── Tool definitions ──────────────────────────────────────────────────────────
@@ -285,26 +328,52 @@ def _dispatch(name: str, args: dict) -> str:
 
 def _system_prompt() -> str:
     facts = memory.summary()
-    return f"""You are the biz agent — an autonomous assistant managing a personal automation agency.
+    return f"""You are the biz agent — autonomous operator for a one-person automation agency.
 
-You have full context of the project and can read/write files, run shell commands, query the leads DB, check outreach status, search the web, and commit/push code.
+You have full access to the project: read/write files, run shell commands, query leads and outreach DBs, search the web, commit/push code, remember facts across sessions.
 
-## Project context
-{PROJECT_MD}
+## Project context (summary — use read_file tool for full detail)
+{_PROJECT_SUMMARY}
 
 ## Stored facts
 {facts}
 
-## Rules
-- Only operate within the biz/ project directory
+## Scope — you operate across the full workspace
+- leadgen/ — scraping, enrichment, validation, qualified leads DB
+- outreach/ — email pipeline, reply tracking, message generation
+- agent/ — your brain, tools, memory
+- telegram/ — this bot
+- notes/ — ideas, research, planning
+- him/ — Victor persona, content strategy, image prompts
+
+## Capabilities
+- Web search via DuckDuckGo
+- Read, write, edit any file in the project
+- Run shell commands (make, python, git, etc.)
+- Query leads DB — stats, top leads, search
+- Query outreach DB — sent, replies, classifications
+- Commit and push any repo
+- Remember facts across conversations
+- Plan and execute multi-step tasks autonomously
+- Content creation, outreach copy, strategy
+- Debug and develop code across all modules
+
+## FORMATTING RULES — CRITICAL
+You are sending messages via Telegram. Telegram does NOT render markdown.
+NEVER use: tables, | pipes |, --- dividers, **bold**, *italic*, `backticks`, # headers, or any markdown syntax.
+ALWAYS use: plain text only. Use line breaks for structure. Use emoji sparingly for visual separation.
+Keep responses short and scannable. Use numbered lists or simple dashes for lists.
+
+## Behaviour rules
 - Never output API keys, passwords, or secrets
-- Prefer reading PROJECT.md and SPEC.md before making decisions
-- When asked to build something, write the code, then confirm it works
-- Be concise — no filler, no unnecessary explanation
+- Read PROJECT.md and SPEC.md before making decisions on what to build
+- When asked to build something, write the code and confirm it works
+- When you take action, say what you did and what the result was
+- Be concise — no filler
 """
 
 
-def ask(user_message: str, max_tool_rounds: int = 8, verbose: bool = True) -> str:
+def ask(user_message: str, max_tool_rounds: int = 20, verbose: bool = True) -> str:
     """
     Send a message to the agent. Runs tool loop until done or max_rounds hit.
     Returns the final text response.
@@ -312,7 +381,8 @@ def ask(user_message: str, max_tool_rounds: int = 8, verbose: bool = True) -> st
     memory.add_history("user", user_message)
 
     messages = [{"role": "system", "content": _system_prompt()}]
-    for h in memory.get_history(n=10)[:-1]:
+    # keep last 6 turns only — reduces tokens per request significantly
+    for h in memory.get_history(n=6)[:-1]:
         messages.append({"role": h["role"], "content": h["content"]})
     messages.append({"role": "user", "content": user_message})
 
@@ -365,6 +435,39 @@ def ask(user_message: str, max_tool_rounds: int = 8, verbose: bool = True) -> st
             })
 
     return "Max tool rounds reached."
+
+
+def run_next_task(verbose: bool = False) -> tuple[str, str] | None:
+    """
+    Pick the next pending task, run it, update status.
+    Returns (task_id, result) or None if no pending tasks.
+    """
+    import tasks as task_store
+    pending = task_store.get_pending()
+    if not pending:
+        return None
+
+    task = pending[0]
+    task_store.update(task["id"], "running")
+
+    prompt = (
+        f"You are working on a queued task. Complete it fully and autonomously.\n\n"
+        f"Task: {task['description']}\n\n"
+        f"When done, summarize what you did in 2-3 sentences. "
+        f"If you need human input to proceed, start your reply with NEEDS_INPUT:"
+    )
+
+    try:
+        result = ask(prompt, verbose=verbose)
+        if result.startswith("NEEDS_INPUT:"):
+            task_store.update(task["id"], "needs_input", result)
+        else:
+            task_store.update(task["id"], "done", result)
+        return task["id"], result
+    except Exception as e:
+        err = f"Task failed: {e}"
+        task_store.update(task["id"], "failed", err)
+        return task["id"], err
 
 
 if __name__ == "__main__":

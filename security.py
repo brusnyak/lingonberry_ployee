@@ -14,6 +14,9 @@ ALLOWED_PATHS = [
     BIZ_ROOT / "leadgen",
     BIZ_ROOT / "outreach",
     BIZ_ROOT / "agent",
+    BIZ_ROOT / "telegram",    BIZ_ROOT / "notes",
+    BIZ_ROOT / "him",
+    BIZ_ROOT / "content",
     BIZ_ROOT / "PROJECT.md",
     BIZ_ROOT / "SPEC.md",
 ]
