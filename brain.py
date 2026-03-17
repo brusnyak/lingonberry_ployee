@@ -22,13 +22,6 @@ PROJECT_MD = (BIZ_ROOT / "PROJECT.md").read_text()
 
 _client = None
 
-FREE_MODELS = [
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
-    "google/gemma-3-27b-it:free",
-    "nousresearch/hermes-3-llama-3.1-405b:free",
-    "nvidia/nemotron-3-super-120b-a12b:free",
-]
 
 def _llm() -> OpenAI:
     global _client
@@ -40,19 +33,42 @@ def _llm() -> OpenAI:
     return _client
 
 
+FREE_MODELS = [
+    # 262k ctx, tool use — best option, try first
+    "qwen/qwen3-next-80b-a3b-instruct:free",
+    # 262k ctx, tool use — Nemotron super, your 35B active params pick
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    # 256k ctx, tool use — step flash, fast
+    "stepfun/step-3.5-flash:free",
+    # 128k ctx, tool use — reliable fallback
+    "meta-llama/llama-3.3-70b-instruct:free",
+    # 128k ctx, tool use
+    "mistralai/mistral-small-3.1-24b-instruct:free",
+    # 131k ctx, tool use
+    "openai/gpt-oss-120b:free",
+]
+
+
 def _chat(messages: list, tools: list = None) -> object:
-    """Try free models in order until one responds."""
+    """Try free models in order, with brief pause between attempts."""
+    import time
     import openai as _openai
     kwargs = dict(messages=messages, temperature=0.3, max_tokens=2000)
     if tools:
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
+
+    last_err = None
     for model in FREE_MODELS:
         try:
             return _llm().chat.completions.create(model=model, **kwargs)
-        except (_openai.RateLimitError, _openai.NotFoundError):
+        except (_openai.RateLimitError, _openai.NotFoundError) as e:
+            last_err = e
+            time.sleep(1)   # brief pause before trying next model
             continue
-    raise RuntimeError("All free models rate-limited or unavailable.")
+        except Exception:
+            raise
+    raise RuntimeError(f"All free models exhausted. Last error: {last_err}")
 
 
 # ── Tool definitions ──────────────────────────────────────────────────────────
@@ -288,7 +304,7 @@ You have full context of the project and can read/write files, run shell command
 """
 
 
-def ask(user_message: str, max_tool_rounds: int = 8) -> str:
+def ask(user_message: str, max_tool_rounds: int = 8, verbose: bool = True) -> str:
     """
     Send a message to the agent. Runs tool loop until done or max_rounds hit.
     Returns the final text response.
@@ -296,33 +312,59 @@ def ask(user_message: str, max_tool_rounds: int = 8) -> str:
     memory.add_history("user", user_message)
 
     messages = [{"role": "system", "content": _system_prompt()}]
-    # inject recent history for continuity
-    for h in memory.get_history(n=10)[:-1]:  # exclude the one we just added
+    for h in memory.get_history(n=10)[:-1]:
         messages.append({"role": h["role"], "content": h["content"]})
     messages.append({"role": "user", "content": user_message})
 
-    for _ in range(max_tool_rounds):
+    for round_n in range(max_tool_rounds):
+        if verbose:
+            print(f"  [round {round_n+1}] calling LLM...", flush=True)
         resp = _chat(messages, tools=TOOLS)
         msg = resp.choices[0].message
+        model_used = resp.model
+        if verbose:
+            print(f"  [model: {model_used}]", flush=True)
+
+        inline_content = (msg.content or "").strip()
 
         if not msg.tool_calls:
-            # final answer
-            answer = msg.content or ""
+            answer = inline_content
             memory.add_history("assistant", answer)
             return answer
 
-        # execute tool calls
-        messages.append(msg)
+        if verbose:
+            for tc in msg.tool_calls:
+                print(f"  [tool] {tc.function.name}({tc.function.arguments[:80]})", flush=True)
+
+        msg_dict = {"role": "assistant"}
+        if inline_content:
+            msg_dict["content"] = inline_content
+        if msg.tool_calls:
+            msg_dict["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in msg.tool_calls
+            ]
+        messages.append(msg_dict)
+
         for tc in msg.tool_calls:
-            args = json.loads(tc.function.arguments)
+            try:
+                args = json.loads(tc.function.arguments)
+            except json.JSONDecodeError:
+                args = {}
             result = _dispatch(tc.function.name, args)
+            if verbose:
+                print(f"  [result] {str(result)[:120]}", flush=True)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
-                "content": result,
+                "content": str(result),
             })
 
-    return "Max tool rounds reached. Last response may be incomplete."
+    return "Max tool rounds reached."
 
 
 if __name__ == "__main__":
@@ -337,4 +379,4 @@ if __name__ == "__main__":
             break
         if not user:
             continue
-        print(f"\nagent: {ask(user)}\n")
+        print(f"\nagent: {ask(user, verbose=False)}\n")
