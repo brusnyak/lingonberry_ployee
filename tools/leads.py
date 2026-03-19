@@ -17,6 +17,19 @@ def _conn() -> sqlite3.Connection:
 def stats() -> str:
     """Return a plain-text summary of lead pipeline state."""
     conn = _conn()
+    try:
+        niche_row = conn.execute(
+            """
+            SELECT target_niche, COUNT(*) AS n
+            FROM businesses
+            WHERE validation_status='qualified' AND COALESCE(target_niche, '') <> ''
+            GROUP BY target_niche
+            ORDER BY n DESC
+            LIMIT 3
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        niche_row = []
     rows = conn.execute(
         """
         SELECT
@@ -29,13 +42,15 @@ def stats() -> str:
         """
     ).fetchone()
     enriched = conn.execute("SELECT COUNT(DISTINCT business_id) AS n FROM enrichment").fetchone()["n"]
+    top_niches = ", ".join(f"{r['target_niche']}={r['n']}" for r in niche_row) if niche_row else "n/a"
     return (
         f"Total leads: {rows['total']}\n"
         f"Approved: {rows['approved']}\n"
         f"Qualified: {rows['qualified']}\n"
         f"Disqualified: {rows['disqualified']}\n"
         f"Site intel done: {rows['intel_done']}\n"
-        f"Enriched: {enriched}"
+        f"Enriched: {enriched}\n"
+        f"Top niches: {top_niches}"
     )
 
 
@@ -45,7 +60,7 @@ def top_qualified(n: int = 10) -> str:
     rows = conn.execute(
         """
         SELECT b.name, b.category, b.address, b.score,
-               b.outreach_angle, w.emails
+               b.outreach_angle, w.emails, b.target_niche
         FROM businesses b
         LEFT JOIN website_data w ON w.business_id = b.id
         WHERE b.validation_status = 'qualified'
@@ -59,7 +74,7 @@ def top_qualified(n: int = 10) -> str:
     lines = []
     for r in rows:
         lines.append(
-            f"- {r['name']} ({r['category']}) | score={r['score']} | {r['address']}\n"
+            f"- {r['name']} ({r['category']}) | niche={r['target_niche'] or 'unknown'} | score={r['score']} | {r['address']}\n"
             f"  angle: {r['outreach_angle']}\n"
             f"  email: {r['emails']}"
         )
@@ -72,7 +87,7 @@ def search_leads(query: str) -> str:
     like = f"%{query}%"
     rows = conn.execute(
         """
-        SELECT name, category, address, validation_status, score
+        SELECT name, category, address, validation_status, score, target_niche
         FROM businesses
         WHERE name LIKE ? OR category LIKE ? OR address LIKE ?
         LIMIT 20
@@ -82,6 +97,6 @@ def search_leads(query: str) -> str:
     if not rows:
         return f"No leads matching '{query}'."
     return "\n".join(
-        f"- {r['name']} | {r['category']} | {r['address']} | {r['validation_status']} | score={r['score']}"
+        f"- {r['name']} | {r['category']} | niche={r['target_niche'] or 'unknown'} | {r['address']} | {r['validation_status']} | score={r['score']}"
         for r in rows
     )

@@ -1,0 +1,79 @@
+[
+  {
+    "id": "e2e247f7",
+    "kind": "task_claimed",
+    "level": "info",
+    "message": "[806865e9] claimed by smoke-worker",
+    "details": {
+      "task_id": "806865e9",
+      "owner": "smoke-worker",
+      "attempt": 1
+    },
+    "created_at": "2026-03-18T13:00:38.138660+00:00"
+  },
+  {
+    "id": "6bd872db",
+    "kind": "task_retry",
+    "level": "warning",
+    "message": "[806865e9] retry: temporary failure",
+    "details": {
+      "task_id": "806865e9",
+      "status": "retry",
+      "error": "temporary failure"
+    },
+    "created_at": "2026-03-18T13:00:38.139541+00:00"
+  },
+  {
+    "id": "e06d77c8",
+    "kind": "task_claimed",
+    "level": "info",
+    "message": "[806865e9] claimed by smoke-worker",
+    "details": {
+      "task_id": "806865e9",
+      "owner": "smoke-worker",
+      "attempt": 2
+    },
+    "created_at": "2026-03-18T13:00:38.140153+00:00"
+  },
+  {
+    "id": "82232f52",
+    "kind": "task_done",
+    "level": "info",
+    "message": "[806865e9] completed",
+    "details": {
+      "task_id": "806865e9"
+    },
+    "created_at": "2026-03-18T13:00:38.140668+00:00"
+  },
+  {
+    "id": "042bef0a",
+    "kind": "task_deleted",
+    "level": "info",
+    "message": "[806865e9] deleted",
+    "details": {
+      "task_id": "806865e9"
+    },
+    "created_at": "2026-03-18T13:00:38.141770+00:00"
+  },
+  {
+    "id": "20d6fef4",
+    "kind": "task_added",
+    "level": "info",
+    "message": "[2ee99d09] smoke task",
+    "details": {
+      "task_id": "2ee99d09",
+      "kind": "general"
+    },
+    "created_at": "2026-03-19T06:06:50.748581+00:00"
+  },
+  {
+    "id": "fdd5aafa",
+    "kind": "task_deleted",
+    "level": "info",
+    "message": "[2ee99d09] deleted",
+    "details": {
+      "task_id": "2ee99d09"
+    },
+    "created_at": "2026-03-19T06:06:50.749345+00:00"
+  }
+]
