@@ -1188,7 +1188,7 @@ Behaviour:
 """
 
 
-def ask(user_message: str, max_tool_rounds: int = 30, verbose: bool = True,
+def ask(user_message: str, max_tool_rounds: int = 15, verbose: bool = True,
         activity_cb=None, confirm_cb=None) -> str:
     """
     Send a message to the agent. Runs tool loop until done or max_rounds hit.
