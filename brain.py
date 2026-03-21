@@ -816,6 +816,29 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "content_engagement_log",
+            "description": "Show recent Victor Instagram engagement session history (likes, comments, follows, profiles discovered).",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "content_run_engagement",
+            "description": "Run a Playwright Instagram engagement session for Victor. Likes posts, leaves comments, follows accounts, and discovers reference profiles. Requires human approval before running a real session.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "niches": {"type": "array", "items": {"type": "string"}, "description": "Target niche keys e.g. dental, real_estate, beauty"},
+                    "dry_run": {"type": "boolean", "default": True, "description": "If true, browse and log but don't actually like/comment/follow"},
+                    "discover_only": {"type": "boolean", "default": False, "description": "If true, only collect profile handles without any engagement"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "git_status",
             "description": "Get git status of a project repo.",
             "parameters": {
@@ -1084,6 +1107,14 @@ def _dispatch(name: str, args: dict) -> str:
             return content.reject_post(args["item_id"])
         elif name == "content_engagement_plan":
             return content.engagement_plan(args.get("niches"))
+        elif name == "content_engagement_log":
+            return content.engagement_log()
+        elif name == "content_run_engagement":
+            return content.run_engagement_session(
+                niches=args.get("niches"),
+                dry_run=args.get("dry_run", True),
+                discover_only=args.get("discover_only", False),
+            )
         elif name == "git_status":
             return git.status(args["repo_path"])
         elif name == "git_commit_push":
