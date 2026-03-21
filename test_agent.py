@@ -1,17 +1,20 @@
 """
 agent/test_agent.py
 Interactive terminal test for the agent — shows full reasoning trace.
-Usage:
-  cd agent && python test_agent.py
-  cd agent && python test_agent.py "run a dry-run engagement session"
+Usage (run from BIZ root):
+  telegram/.venv/bin/python agent/test_agent.py
+  telegram/.venv/bin/python agent/test_agent.py "run a dry-run engagement session"
 """
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+# Must run from BIZ root — telegram venv has all deps
+BIZ_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(BIZ_ROOT))
+sys.path.insert(0, str(BIZ_ROOT / "agent"))
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env")
+load_dotenv(BIZ_ROOT / ".env")
 
 import brain
 

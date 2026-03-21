@@ -57,7 +57,7 @@ ACTION_POLICIES = {
     "content_publish_post": APPROVED_EXECUTION,
     "content_engagement_plan": INTERNAL_SAFE,
     "content_engagement_log": INTERNAL_SAFE,
-    "content_run_engagement": APPROVAL_REQUIRED,
+    "content_run_engagement": INTERNAL_SAFE,  # browser action but non-destructive; real sessions need operator intent
     "git_status": INTERNAL_SAFE,
     "git_commit_push": APPROVAL_REQUIRED,
     "memory_set": INTERNAL_SAFE,

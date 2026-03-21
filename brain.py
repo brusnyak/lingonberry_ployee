@@ -1185,6 +1185,12 @@ Behaviour:
 - During queued overnight tasks, respect the task contract and approval mode. If an outward action needs approval, stop and return NEEDS_INPUT with the exact blocker.
 - When you take action: say what you did and the result
 - Be concise — no filler, no aimless exploration
+
+Tool errors and unexpected results:
+- If a tool returns an error or a result that doesn't match what was expected (e.g. 0 results when results were expected, a traceback, "manual_required", "login needed"), treat it as a signal to investigate — don't just retry the same call.
+- Read the error message carefully. If it mentions a missing login, missing config, or a path issue, say so clearly and tell the operator what needs to be fixed.
+- If a tool returns "manual_required: ..." it means human action is needed before the tool can work. Stop, explain what's needed, and ask the operator to do it.
+- Never silently retry a failing tool more than once without explaining why it failed.
 """
 
 
@@ -1233,10 +1239,27 @@ def ask(user_message: str, max_tool_rounds: int = 15, verbose: bool = True,
         for tc in msg.tool_calls:
             _log(f"[tool] {tc.function.name}({tc.function.arguments[:80]})")
             recent_tool_signatures.append((tc.function.name, tc.function.arguments[:120]))
+
+        # Loop detection: same tool cancelled 3+ times → surface immediately
+        if len(recent_tool_signatures) >= 3:
+            last_3 = [s[0] for s in recent_tool_signatures[-3:]]
+            if len(set(last_3)) == 1:
+                cancelled_name = last_3[0]
+                if any(
+                    f"Action cancelled by operator: {cancelled_name}" in str(m.get("content", ""))
+                    for m in messages if m.get("role") == "tool"
+                ):
+                    answer = (
+                        f"I need your approval to run `{cancelled_name}`. "
+                        f"Please confirm you want me to proceed, or tell me to skip it."
+                    )
+                    memory.add_history("assistant", answer)
+                    return answer
+
         if len(recent_tool_signatures) >= 6:
             window = recent_tool_signatures[-6:]
             if len(set(window)) <= 2:
-                answer = "I am looping on the same tools without making progress. I need either a narrower query or a different source/tool path."
+                answer = "I am looping on the same tools without making progress. I need either a narrower query or a different approach."
                 memory.add_history("assistant", answer)
                 return answer
 
