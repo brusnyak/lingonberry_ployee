@@ -396,6 +396,139 @@ print("Next step: reply to that email from the recipient mailbox, then run /repl
     return _run_outreach_python(script)
 
 
+def deterministic_test_lead_flow(lead_id: int = 302, recipient: str = "", clear_history: bool = True, send: bool = False) -> str:
+    from outreach.email_sender import pick_account, send_email
+    from outreach.generator import generate_email
+    from outreach.runtime import assert_outbound_allowed
+    from storage.db import connect, init_outreach_tables, log_outreach, mark_sent
+
+    conn = _conn()
+    init_outreach_tables(conn)
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(businesses)").fetchall()}
+
+    lead = conn.execute(
+        """
+        SELECT
+            b.id, b.name, b.category, b.address, b.website, b.phone, b.email_maps,
+            COALESCE(b.target_niche, '') AS target_niche,
+            COALESCE(b.top_gap, '') AS top_gap,
+            COALESCE(b.top_opportunity, '') AS top_opportunity,
+            COALESCE(b.gap_profile, '') AS gap_profile,
+            COALESCE(b.opportunity_profile, '') AS opportunity_profile,
+            COALESCE(b.brand_summary, '') AS brand_summary,
+            COALESCE(b.pain_point_guess, '') AS pain_point_guess,
+            COALESCE(b.outreach_angle, '') AS outreach_angle,
+            COALESCE(b.apparent_size, '') AS apparent_size,
+            COALESCE(b.digital_maturity, '') AS digital_maturity,
+            COALESCE(b.pipeline_stage, 'lead') AS pipeline_stage,
+            COALESCE(w.emails, '') AS site_emails,
+            COALESCE(w.socials, '') AS socials,
+            COALESCE(w.language, '') AS language
+        FROM businesses b
+        LEFT JOIN website_data w ON w.id = (
+            SELECT MAX(w2.id) FROM website_data w2 WHERE w2.business_id = b.id
+        )
+        WHERE b.id = ?
+        """,
+        (lead_id,),
+    ).fetchone()
+    if not lead:
+        return f"Lead {lead_id} not found."
+
+    def _split_emails(raw: str) -> list[str]:
+        values = []
+        for part in (raw or "").replace(";", ",").split(","):
+            candidate = part.strip()
+            if "@" in candidate and candidate not in values:
+                values.append(candidate)
+        return values
+
+    derived_emails = _split_emails(recipient) or _split_emails(lead["site_emails"]) or _split_emails(lead["email_maps"])
+    to_address = derived_emails[0] if derived_emails else ""
+
+    if clear_history:
+        reply_ids = [row["id"] for row in conn.execute("SELECT id FROM replies WHERE lead_id = ?", (lead_id,)).fetchall()]
+        if reply_ids:
+            placeholders = ",".join("?" for _ in reply_ids)
+            conn.execute(f"DELETE FROM reply_drafts WHERE reply_id IN ({placeholders})", reply_ids)
+            conn.execute(f"DELETE FROM reply_classification WHERE reply_id IN ({placeholders})", reply_ids)
+        review_keys = [
+            row["review_batch_key"]
+            for row in conn.execute(
+                """
+                SELECT DISTINCT review_batch_key
+                FROM outreach_log
+                WHERE lead_id = ? AND COALESCE(review_batch_key, '') != ''
+                """,
+                (lead_id,),
+            ).fetchall()
+        ]
+        if review_keys:
+            placeholders = ",".join("?" for _ in review_keys)
+            conn.execute(f"DELETE FROM review_batches WHERE batch_key IN ({placeholders})", review_keys)
+        conn.execute("DELETE FROM replies WHERE lead_id = ?", (lead_id,))
+        conn.execute("DELETE FROM outreach_log WHERE lead_id = ?", (lead_id,))
+
+        update_fields = {"pipeline_stage": "lead"}
+        for field in ("service_type", "delivery_status", "onboarding_status", "next_action", "client_notes", "required_access"):
+            if field in cols:
+                update_fields[field] = ""
+        if update_fields:
+            set_sql = ", ".join(f"{key} = ?" for key in update_fields)
+            conn.execute(f"UPDATE businesses SET {set_sql} WHERE id = ?", [*update_fields.values(), lead_id])
+        conn.commit()
+
+    if not to_address:
+        return (
+            f"Lead {lead_id} ({lead['name']}) was reset, but no usable email was found. "
+            f"Needs enrichment before a test outreach can be sent."
+        )
+
+    draft = generate_email(dict(lead))
+    outreach_id = log_outreach(
+        conn,
+        lead_id,
+        "email",
+        to_address,
+        draft["body"],
+        draft["subject"],
+        status="pending",
+        message_variant_fingerprint=draft.get("fingerprint", "deterministic-test-flow"),
+    )
+
+    sender_name = ""
+    sender_address = ""
+    action = "drafted"
+    if send:
+        assert_outbound_allowed("deterministic_test_lead_flow")
+        account = pick_account(conn)
+        if account is None:
+            raise RuntimeError("No outbound email account available for test send.")
+        send_email(to_address, draft["subject"], draft["body"], account)
+        mark_sent(conn, outreach_id, account.get("name", ""), account.get("address", ""))
+        sender_name = account.get("name", "")
+        sender_address = account.get("address", "")
+        action = "sent"
+
+    current = conn.execute(
+        "SELECT status, approval_state, sent_at FROM outreach_log WHERE id = ?",
+        (outreach_id,),
+    ).fetchone()
+    stage = conn.execute("SELECT pipeline_stage FROM businesses WHERE id = ?", (lead_id,)).fetchone()
+    return "\n".join([
+        f"Lead reset: {lead['name']} (id={lead_id})",
+        f"Current stage: {stage['pipeline_stage'] if stage else 'unknown'}",
+        f"To: {to_address}",
+        f"Outreach id: {outreach_id}",
+        f"Action: {action}",
+        f"Status: {current['status'] if current else 'unknown'} / {current['approval_state'] if current else 'unknown'}",
+        f"Sender: {sender_name or '(draft only)'} <{sender_address or ''}>",
+        "",
+        "Next step: use the existing reply pipeline once a reply arrives, or run the reply-test helpers for an internal mailbox flow.",
+    ])
+
+
+
 def internal_reply_test_status(limit: int = 5) -> str:
     script = f"""
 from storage.db import connect, init_outreach_tables, get_reply_queue, upsert_reply_draft
@@ -435,7 +568,7 @@ for row in rows:
 rows = [dict(row) for row in get_reply_queue(conn, limit=50) if "internal reply workflow test" in ((row["reply_subject"] or "").lower()) or "smtp test" in ((row["reply_subject"] or "").lower())]
 rows = rows[:{int(limit)}]
 
-print(f"Prepared {prepared} internal reply draft(s).")
+print(f"Prepared {{prepared}} internal reply draft(s).")
 for row in rows:
     print(f"")
     print(f"[reply {{row['reply_id']}}] {{row['name']}} -> {{row['from_address'] or 'unknown'}}")
@@ -1179,7 +1312,7 @@ for row in get_reply_queue_needing_action(conn, limit=20):
 stats = get_stats(conn)
 print(f"Replies logged: {logged}")
 print(f"Replies classified: {classified}")
-print(f"Reply drafts prepared: {prepared}")
+print(f"Reply drafts prepared: {{prepared}}")
 print(f"Total replies: {stats['replies']} | Pending drafts: {stats['pending']}")
 """
     return _run_outreach_python(script)

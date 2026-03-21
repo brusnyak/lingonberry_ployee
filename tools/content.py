@@ -45,10 +45,31 @@ def prompt_manifests(item_id: str = "") -> str:
 
 
 def engagement_plan(niches: list[str] | None = None) -> str:
-    args = ["engagement.py"]
+    args = ["engagement.py", "--plan"]
     if niches:
         args.extend(["--niches", *niches])
     return _run(*args)
+
+
+def engagement_log() -> str:
+    return _run("engagement.py", "--log")
+
+
+def run_engagement_session(
+    niches: list[str] | None = None,
+    dry_run: bool = False,
+    discover_only: bool = False,
+) -> str:
+    """Run a live Playwright engagement session on Instagram."""
+    python = str(PLAYWRIGHT_PYTHON) if PLAYWRIGHT_PYTHON.exists() else sys.executable
+    args = ["engagement.py"]
+    if niches:
+        args.extend(["--niches", *niches])
+    if dry_run:
+        args.append("--dry-run")
+    if discover_only:
+        args.append("--discover-only")
+    return _run(*args, python=python)
 
 
 def generate_images(item_id: str, sample_count: int = 2, aspect_ratio: str = "3:4") -> str:
@@ -92,8 +113,8 @@ def plan_calendar(weeks: int = 2, queue: bool = False) -> str:
     import sys
     sys.path.insert(0, str(CONTENT_DIR.parent))
     try:
-        from content.calendar import generate_calendar, format_calendar_telegram
+        from content.content_calendar import generate_calendar, format_calendar_telegram
     except ImportError:
-        from calendar import generate_calendar, format_calendar_telegram
+        from content_calendar import generate_calendar, format_calendar_telegram
     posts = generate_calendar(weeks=weeks, queue=queue)
     return format_calendar_telegram(posts)
