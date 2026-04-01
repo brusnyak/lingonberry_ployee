@@ -64,15 +64,27 @@ def run_shell(cmd: str, cwd: str = None) -> str:
 
 def code_search(pattern: str, path: str = ".") -> str:
     target = _resolve(path)
-    result = subprocess.run(
-        ["rg", "-n", "--hidden", "--glob", "!.git", pattern, str(target)],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        cwd=BIZ_ROOT,
-    )
-    output = (result.stdout + result.stderr).strip()
-    return scrub_secrets(output[:4000]) or "(no matches)"
+    try:
+        result = subprocess.run(
+            ["rg", "-n", "--hidden", "--glob", "!.git", pattern, str(target)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=BIZ_ROOT,
+        )
+        output = (result.stdout + result.stderr).strip()
+        return scrub_secrets(output[:4000]) or "(no matches)"
+    except FileNotFoundError:
+        # rg not installed — fall back to grep
+        result = subprocess.run(
+            ["grep", "-rn", pattern, str(target)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=BIZ_ROOT,
+        )
+        output = (result.stdout + result.stderr).strip()
+        return scrub_secrets(output[:4000]) or "(no matches)"
 
 
 def run_tests(cmd: str, cwd: str = None) -> str:

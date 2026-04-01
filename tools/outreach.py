@@ -8,14 +8,16 @@ import subprocess
 import sys
 import textwrap
 import uuid
+import os
 from pathlib import Path
 
 from outreach.runtime import assert_outbound_allowed
-from outreach.senders import canonical_sender
+from outreach.senders import canonical_sender, internal_sender_addresses
 
 LEADS_DB = Path(__file__).parent.parent.parent / "leadgen" / "data" / "leads.db"
 OUTREACH_DIR = Path(__file__).parent.parent.parent / "outreach"
 OUTREACH_PYTHON = OUTREACH_DIR / ".venv" / "bin" / "python"
+TEST_RECIPIENTS = {"egorbrusnyak@gmail.com", *{addr.lower() for addr in internal_sender_addresses()}}
 
 
 def _conn() -> sqlite3.Connection:
@@ -59,41 +61,40 @@ def safe_mode_status() -> str:
 
 def production_test_summary() -> str:
     conn = _conn()
-    internal = {addr.lower() for addr in [
-        "maxberryme68@gmail.com",
-        "brusnyak.f@gmail.com",
-        "victor.brusnyak@gmail.com",
-        "brusnyakyegor@gmail.com",
-    ]}
+    quoted = ",".join("'" + addr.replace("'", "''") + "'" for addr in sorted(TEST_RECIPIENTS))
     reply_rows = conn.execute(
-        """
+        f"""
         SELECT
             COUNT(*) FILTER (
                 WHERE LOWER(COALESCE(subject, '')) LIKE '%internal reply workflow test%'
                    OR LOWER(COALESCE(subject, '')) LIKE '%smtp test%'
-                   OR LOWER(COALESCE(from_address, '')) IN ('maxberryme68@gmail.com','brusnyak.f@gmail.com','victor.brusnyak@gmail.com','brusnyakyegor@gmail.com')
+                   OR LOWER(COALESCE(from_address, '')) IN ({quoted})
             ) AS test_replies,
             COUNT(*) FILTER (
                 WHERE NOT (
                     LOWER(COALESCE(subject, '')) LIKE '%internal reply workflow test%'
                     OR LOWER(COALESCE(subject, '')) LIKE '%smtp test%'
-                    OR LOWER(COALESCE(from_address, '')) IN ('maxberryme68@gmail.com','brusnyak.f@gmail.com','victor.brusnyak@gmail.com','brusnyakyegor@gmail.com')
+                    OR LOWER(COALESCE(from_address, '')) IN ({quoted})
                 )
             ) AS prod_replies
         FROM replies
         """
     ).fetchone()
     outreach_rows = conn.execute(
-        """
+        f"""
         SELECT
             COUNT(*) FILTER (
                 WHERE COALESCE(message_variant_fingerprint, '') = 'internal-reply-workflow-test'
+                   OR COALESCE(message_variant_fingerprint, '') = 'internal-matrix-test'
                    OR LOWER(COALESCE(subject, '')) LIKE '%smtp test%'
+                   OR LOWER(COALESCE(address, '')) IN ({quoted})
             ) AS test_outreach,
             COUNT(*) FILTER (
                 WHERE NOT (
                     COALESCE(message_variant_fingerprint, '') = 'internal-reply-workflow-test'
+                    OR COALESCE(message_variant_fingerprint, '') = 'internal-matrix-test'
                     OR LOWER(COALESCE(subject, '')) LIKE '%smtp test%'
+                    OR LOWER(COALESCE(address, '')) IN ({quoted})
                 )
             ) AS prod_outreach
         FROM outreach_log
@@ -396,13 +397,144 @@ print("Next step: reply to that email from the recipient mailbox, then run /repl
     return _run_outreach_python(script)
 
 
-def deterministic_test_lead_flow(lead_id: int = 302, recipient: str = "", clear_history: bool = True, send: bool = False) -> str:
-    from outreach.email_sender import pick_account, send_email
+def internal_matrix_test(send: bool = True, clear_history: bool = True) -> str:
+    from outreach.email_sender import _load_accounts, render_outreach_body, send_email
     from outreach.generator import generate_email
     from outreach.runtime import assert_outbound_allowed
-    from storage.db import connect, init_outreach_tables, log_outreach, mark_sent
+    from outreach.storage.db import init_outreach_tables, log_outreach, mark_sent
+
+    if send:
+        assert_outbound_allowed("internal_matrix_test")
+
+    accounts = _load_accounts()
+    if len(accounts) < 2:
+        return "Need at least 2 configured internal mailboxes."
 
     conn = _conn()
+    init_outreach_tables(conn)
+    niches = ["real_estate", "accounting_tax", "dental_medical", "home_services"]
+    lead_ids: list[int] = []
+
+    for idx, account in enumerate(accounts):
+        niche = niches[idx % len(niches)]
+        address = account["address"].strip().lower()
+        first_name = canonical_sender(address, account.get("name", "")).get("name", "").split()[0]
+        existing = conn.execute(
+            """
+            SELECT id FROM businesses
+            WHERE LOWER(COALESCE(email_maps, '')) = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (address,),
+        ).fetchone()
+        if existing:
+            lead_id = existing["id"]
+            conn.execute(
+                """
+                UPDATE businesses
+                SET target_niche=?, validation_status='qualified', approved=1,
+                    pipeline_stage='lead', contact_name=?, name=?
+                WHERE id=?
+                """,
+                (niche, first_name, account.get("name", ""), lead_id),
+            )
+        else:
+            cur = conn.execute(
+                """
+                INSERT INTO businesses (
+                    place_id, name, category, address, phone, website, email_maps,
+                    query, collected_at, approved, score, validation_status,
+                    target_niche, contact_name, outreach_angle, pipeline_stage
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 1, 50, 'qualified', ?, ?, '', 'lead')
+                """,
+                (
+                    f"internal_{address.replace('@', '_at_').replace('.', '_')}",
+                    account.get("name", ""),
+                    "internal_test",
+                    "internal",
+                    "",
+                    "",
+                    address,
+                    "internal matrix test",
+                    niche,
+                    first_name,
+                ),
+            )
+            lead_id = cur.lastrowid
+        lead_ids.append(lead_id)
+
+    if clear_history and lead_ids:
+        placeholders = ",".join("?" for _ in lead_ids)
+        conn.execute(
+            f"DELETE FROM outreach_log WHERE lead_id IN ({placeholders}) AND COALESCE(message_variant_fingerprint, '') = 'internal-matrix-test'",
+            lead_ids,
+        )
+    conn.commit()
+
+    results: list[str] = []
+    for idx, sender in enumerate(accounts):
+        recipient = accounts[(idx + 1) % len(accounts)]
+        lead_id = lead_ids[(idx + 1) % len(lead_ids)]
+        lead = conn.execute(
+            """
+            SELECT
+                b.id, b.name, b.category, b.address, b.website, b.phone, b.email_maps,
+                COALESCE(b.target_niche, '') AS target_niche,
+                COALESCE(b.top_gap, '') AS top_gap,
+                COALESCE(b.top_opportunity, '') AS top_opportunity,
+                COALESCE(b.gap_profile, '') AS gap_profile,
+                COALESCE(b.opportunity_profile, '') AS opportunity_profile,
+                COALESCE(b.brand_summary, '') AS brand_summary,
+                COALESCE(b.pain_point_guess, '') AS pain_point_guess,
+                COALESCE(b.outreach_angle, '') AS outreach_angle,
+                COALESCE(b.apparent_size, '') AS apparent_size,
+                COALESCE(b.digital_maturity, '') AS digital_maturity,
+                COALESCE(b.contact_name, '') AS contact_name,
+                COALESCE(b.pipeline_stage, 'lead') AS pipeline_stage,
+                '' AS site_emails,
+                '' AS socials,
+                'en' AS language
+            FROM businesses b
+            WHERE b.id = ?
+            """,
+            (lead_id,),
+        ).fetchone()
+        draft = generate_email(dict(lead), account=sender)
+        outreach_id = log_outreach(
+            conn,
+            lead_id,
+            "email",
+            recipient["address"],
+            draft["body"],
+            draft["subject"],
+            status="pending",
+            message_variant_fingerprint="internal-matrix-test",
+        )
+        if send:
+            final_body = render_outreach_body(draft["body"], sender, "en")
+            send_email(recipient["address"], draft["subject"], final_body, sender)
+            mark_sent(conn, outreach_id, sender.get("name", ""), sender.get("address", ""))
+            status = "sent"
+        else:
+            status = "drafted"
+        results.append(
+            f"[{outreach_id}] {status}: {sender['address']} -> {recipient['address']} | niche={lead['target_niche'] or 'unknown'}"
+        )
+
+    return "\n".join([
+        f"Internal matrix test complete ({'send' if send else 'draft only'}).",
+        *results,
+    ])
+
+
+def deterministic_test_lead_flow(lead_id: int = 302, recipient: str = "", clear_history: bool = True, send: bool = False, sender_address: str = "") -> str:
+    from outreach.email_sender import _load_accounts, pick_account, render_outreach_body, send_email
+    from outreach.generator import generate_email
+    from outreach.runtime import assert_outbound_allowed
+    from outreach.storage.db import init_outreach_tables, log_outreach, mark_sent
+
+    conn = _conn()  # leadgen/data/leads.db — contains both lead and outreach tables
     init_outreach_tables(conn)
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(businesses)").fetchall()}
 
@@ -484,7 +616,16 @@ def deterministic_test_lead_flow(lead_id: int = 302, recipient: str = "", clear_
             f"Needs enrichment before a test outreach can be sent."
         )
 
-    draft = generate_email(dict(lead))
+    # Resolve account early so generate_email gets the right sender name for sign-off
+    _pre_account = None
+    if send:
+        if sender_address:
+            all_accounts = _load_accounts()
+            _pre_account = next((a for a in all_accounts if a["address"].lower() == sender_address.lower()), None)
+        else:
+            _pre_account = pick_account(conn)
+
+    draft = generate_email(dict(lead), account=_pre_account)
     outreach_id = log_outreach(
         conn,
         lead_id,
@@ -496,18 +637,20 @@ def deterministic_test_lead_flow(lead_id: int = 302, recipient: str = "", clear_
         message_variant_fingerprint=draft.get("fingerprint", "deterministic-test-flow"),
     )
 
-    sender_name = ""
-    sender_address = ""
+    _sender_name = ""
+    _sender_addr = ""
     action = "drafted"
     if send:
         assert_outbound_allowed("deterministic_test_lead_flow")
-        account = pick_account(conn)
+        account = _pre_account
         if account is None:
             raise RuntimeError("No outbound email account available for test send.")
-        send_email(to_address, draft["subject"], draft["body"], account)
+        lang = (lead.get("language") or "en").strip() or "en"
+        final_body = render_outreach_body(draft["body"], account, lang)
+        send_email(to_address, draft["subject"], final_body, account)
         mark_sent(conn, outreach_id, account.get("name", ""), account.get("address", ""))
-        sender_name = account.get("name", "")
-        sender_address = account.get("address", "")
+        _sender_name = account.get("name", "")
+        _sender_addr = account.get("address", "")
         action = "sent"
 
     current = conn.execute(
@@ -522,7 +665,7 @@ def deterministic_test_lead_flow(lead_id: int = 302, recipient: str = "", clear_
         f"Outreach id: {outreach_id}",
         f"Action: {action}",
         f"Status: {current['status'] if current else 'unknown'} / {current['approval_state'] if current else 'unknown'}",
-        f"Sender: {sender_name or '(draft only)'} <{sender_address or ''}>",
+        f"Sender: {_sender_name or '(draft only)'} <{_sender_addr or ''}>",
         "",
         "Next step: use the existing reply pipeline once a reply arrives, or run the reply-test helpers for an internal mailbox flow.",
     ])
@@ -628,39 +771,27 @@ def pending_drafts(n: int = 10) -> str:
 
 
 def _signature_block(account: dict, language: str = "en") -> str:
-    name = (account.get("name") or "").strip()
-    if name:
-        parts = [part for part in name.split() if part]
-        if len(parts) >= 2:
-            signer = f"{parts[0]} {parts[-1][0]}."
-        else:
-            signer = parts[0]
-    else:
-        signer = "Team"
-    lang = (language or "en").lower()
-    if lang.startswith("sk"):
-        options = ["Dajte vedieť", "Vďaka", "Budem rád za odpoveď", "Ďakujem"]
-    elif lang.startswith("cs"):
-        options = ["Dejte vědět", "Díky", "Budu rád za odpověď", "Děkuji"]
-    elif lang.startswith("de"):
-        options = ["Geben Sie gern kurz Bescheid", "Danke", "Ich bin gespannt auf Ihre Rückmeldung", "Viele Grüße"]
-    else:
-        options = ["Cheers", "Thanks", "Let me know", "Curious either way"]
-    closing = options[sum(ord(ch) for ch in ((account.get("address") or "") + lang)) % len(options)]
-    return f"{closing},\n{signer}"
+    from outreach.email_sender import signature_block
+
+    return signature_block(account, language)
 
 
 def _render_final_body(body: str, account: dict, language: str = "en") -> str:
-    clean = (body or "").rstrip()
-    return f"{clean}\n\n{_signature_block(account, language)}"
+    from outreach.email_sender import render_outreach_body
+
+    return render_outreach_body(body, account, language)
 
 
 def preview_drafts(n: int = 3) -> str:
     script = f"""
 from storage.db import connect, init_outreach_tables, get_pending_drafts, get_approved_drafts, get_scheduled_drafts
-from email_sender import pick_account
+from email_sender import pick_account, render_outreach_body
+import os
 
 def infer_language(row):
+    mode = os.environ.get("OUTREACH_LANGUAGE_MODE", "english_first").strip().lower()
+    if mode in {{"english", "english_first", "en"}}:
+        return "en"
     raw = (row["language"] or "").strip().lower()
     if raw:
         return raw
@@ -673,25 +804,6 @@ def infer_language(row):
     if ".at" in website or ".de" in website or "wien" in address or "vienna" in address:
         return "de"
     return "en"
-
-def signature_block(account, language):
-    name = (account.get("name") or "").strip()
-    if name:
-        parts = [part for part in name.split() if part]
-        signer = f"{{parts[0]}} {{parts[-1][0]}}." if len(parts) >= 2 else parts[0]
-    else:
-        signer = "Team"
-    lang = (language or "en").lower()
-    if lang.startswith("sk"):
-        options = ["Dajte vedieť", "Vďaka", "Budem rád za odpoveď", "Ďakujem"]
-    elif lang.startswith("cs"):
-        options = ["Dejte vědět", "Díky", "Budu rád za odpověď", "Děkuji"]
-    elif lang.startswith("de"):
-        options = ["Geben Sie gern kurz Bescheid", "Danke", "Ich bin gespannt auf Ihre Rückmeldung", "Viele Grüße"]
-    else:
-        options = ["Cheers", "Thanks", "Let me know", "Curious either way"]
-    closing = options[sum(ord(ch) for ch in ((account.get("address") or "") + lang)) % len(options)]
-    return f"{{closing}},\\n{{signer}}"
 
 conn = connect()
 init_outreach_tables(conn)
@@ -707,7 +819,7 @@ if not rows:
 for row in rows:
     acc = {{"name": row["sender_name"], "address": row["sender_address"]}} if row["sender_address"] else (pick_account(conn) or {{"name": "Sender", "address": "(next available account unavailable)"}})
     lang = infer_language(row)
-    final_body = (row["message"] or "").rstrip() + "\\n\\n" + signature_block(acc, lang)
+    final_body = render_outreach_body(row["message"] or "", acc, lang)
     print(f"[{{row['id']}}] {{row['name']}} -> {{row['address']}}")
     print(f"language: {{lang}} | from: {{acc['name']}} <{{acc['address']}}>")
     print(f"subject: {{row['subject'] or '(no subject)'}} | status: {{row['status']}}")
@@ -728,13 +840,15 @@ def _run_outreach_python(script: str) -> str:
         cwd=str(OUTREACH_DIR),
         capture_output=True,
         text=True,
-        timeout=300,
+        timeout=120,  # reduced from 300 — fail fast
     )
-    output = (result.stdout or "").strip()
-    error = (result.stderr or "").strip()
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
     if result.returncode != 0:
-        raise RuntimeError(error or output or f"Outreach command failed with exit {result.returncode}")
-    return output or "(no output)"
+        # Surface the most useful part of stderr (last 800 chars covers tracebacks)
+        err_detail = stderr[-800:] if stderr else stdout[-400:] if stdout else f"exit code {result.returncode}"
+        raise RuntimeError(err_detail)
+    return stdout or "(no output)"
 
 
 def generate_drafts(limit: int = 5, target_niche: str = "") -> str:
@@ -806,9 +920,19 @@ for lead in leads:
         if not to_addr:
             errors.append(f"{{lead['name']}}: no email")
             continue
-        result = generate_email(lead)
+        # Assign sender at draft creation time so preview shows correct name
+        from email_sender import pick_account
+        acc = pick_account(conn)
+        result = generate_email(lead, account=acc)
         draft_id = log_outreach(conn, lead["id"], "email", to_addr, result["body"], result["subject"], status="pending", message_variant_fingerprint=result.get("fingerprint", ""))
-        created.append(f"- [{{draft_id}}] {{lead['name']}} ({{lead.get('target_niche') or 'unknown'}}) -> {{to_addr}} | {{result['subject']}}")
+        if acc and draft_id:
+            conn.execute("UPDATE outreach_log SET sender_name=?, sender_address=? WHERE id=?",
+                         (acc.get("name",""), acc.get("address",""), draft_id))
+            conn.commit()
+        sender_label = acc["address"] if acc else "unassigned"
+        created.append(f"- [{{draft_id}}] {{lead['name']}} ({{lead.get('target_niche') or 'unknown'}}) -> {{to_addr}} | from={{sender_label}} | {{result['subject']}}")
+    except Exception as e:
+        errors.append(f"{{lead['name']}}: {{e}}")
     except Exception as e:
         errors.append(f"{{lead['name']}}: {{e}}")
 
@@ -852,6 +976,7 @@ def send_review_batch(limit: int = 5, recipient: str = "egorbrusnyak@gmail.com")
     assert_outbound_allowed("send_review_batch")
     script = f"""
 import uuid
+import os
 from storage.db import (
     connect,
     init_outreach_tables,
@@ -859,9 +984,12 @@ from storage.db import (
     create_review_batch,
     mark_review_batch_sent,
 )
-from email_sender import _load_accounts, _last_sent_at, _sent_today, send_email
+from email_sender import _load_accounts, _last_sent_at, _sent_today, render_outreach_body, send_email
 
 def infer_language(row):
+    mode = os.environ.get("OUTREACH_LANGUAGE_MODE", "english_first").strip().lower()
+    if mode in {{"english", "english_first", "en"}}:
+        return "en"
     raw = (row["language"] or "").strip().lower()
     if raw:
         return raw
@@ -874,25 +1002,6 @@ def infer_language(row):
     if ".at" in website or ".de" in website or "wien" in address or "vienna" in address:
         return "de"
     return "en"
-
-def signature_block(account, language):
-    name = (account.get("name") or "").strip()
-    if name:
-        parts = [part for part in name.split() if part]
-        signer = f"{{parts[0]}} {{parts[-1][0]}}." if len(parts) >= 2 else parts[0]
-    else:
-        signer = "Team"
-    lang = (language or "en").lower()
-    if lang.startswith("sk"):
-        options = ["Dajte vedieť", "Vďaka", "Budem rád za odpoveď", "Ďakujem"]
-    elif lang.startswith("cs"):
-        options = ["Dejte vědět", "Díky", "Budu rád za odpověď", "Děkuji"]
-    elif lang.startswith("de"):
-        options = ["Geben Sie gern kurz Bescheid", "Danke", "Ich bin gespannt auf Ihre Rückmeldung", "Viele Grüße"]
-    else:
-        options = ["Cheers", "Thanks", "Let me know", "Curious either way"]
-    closing = options[sum(ord(ch) for ch in ((account.get("address") or "") + lang)) % len(options)]
-    return f"{{closing}},\\n{{signer}}"
 
 def pick_batch_accounts(conn, count):
     eligible = []
@@ -941,7 +1050,7 @@ for row, account in zip(rows, assigned_accounts):
             row["id"],
         ),
     )
-    final_body = (row["message"] or "").rstrip() + "\\n\\n" + signature_block(account, lang)
+    final_body = render_outreach_body(row["message"] or "", account, lang)
     blocks.append(
         f"From: {{account['name']}} <{{account['address']}}>\\n"
         f"To: [{{row['id']}}] {{row['name']}} -> {{row['address']}}\\n"
@@ -969,7 +1078,19 @@ create_review_batch(
     draft_ids=[row["id"] for row in rows],
 )
 conn.commit()
-send_email({recipient!r}, subject, body, review_sender)
+try:
+    send_email({recipient!r}, subject, body, review_sender)
+except Exception as e:
+    conn.execute("DELETE FROM review_batches WHERE batch_key=?", (batch_key,))
+    conn.execute(
+        "UPDATE outreach_log "
+        "SET approval_state='pending', review_batch_key=NULL, error_note=? "
+        "WHERE review_batch_key=?",
+        (f"review send failed: {{e}}", batch_key),
+    )
+    conn.commit()
+    raise
+
 mark_review_batch_sent(conn, batch_key)
 print(f"Sent review batch {{batch_key}} to {recipient}.")
 for row, account in zip(rows, assigned_accounts):
@@ -1192,10 +1313,16 @@ def process_send_queue(limit: int = 5) -> str:
     assert_outbound_allowed("process_send_queue")
     script = f"""
 from datetime import datetime, timezone
+import time
+import random
 from storage.db import connect, init_outreach_tables, get_due_scheduled_drafts, mark_failed, mark_sent
-from email_sender import send_email
+from email_sender import render_outreach_body, send_email
+import os
 
 def infer_language(row):
+    mode = os.environ.get("OUTREACH_LANGUAGE_MODE", "english_first").strip().lower()
+    if mode in {{"english", "english_first", "en"}}:
+        return "en"
     raw = (row["language"] or "").strip().lower()
     if raw:
         return raw
@@ -1209,25 +1336,6 @@ def infer_language(row):
         return "de"
     return "en"
 
-def signature_block(account, language):
-    name = (account.get("name") or "").strip()
-    if name:
-        parts = [part for part in name.split() if part]
-        signer = f"{{parts[0]}} {{parts[-1][0]}}." if len(parts) >= 2 else parts[0]
-    else:
-        signer = "Team"
-    lang = (language or "en").lower()
-    if lang.startswith("sk"):
-        options = ["Dajte vedieť", "Vďaka", "Budem rád za odpoveď", "Ďakujem"]
-    elif lang.startswith("cs"):
-        options = ["Dejte vědět", "Díky", "Budu rád za odpověď", "Děkuji"]
-    elif lang.startswith("de"):
-        options = ["Geben Sie gern kurz Bescheid", "Danke", "Ich bin gespannt auf Ihre Rückmeldung", "Viele Grüße"]
-    else:
-        options = ["Cheers", "Thanks", "Let me know", "Curious either way"]
-    closing = options[sum(ord(ch) for ch in ((account.get("address") or "") + lang)) % len(options)]
-    return f"{{closing}},\\n{{signer}}"
-
 conn = connect()
 init_outreach_tables(conn)
 rows = get_due_scheduled_drafts(conn, datetime.now(timezone.utc).isoformat(), limit={int(limit)})
@@ -1235,9 +1343,15 @@ if not rows:
     print("No scheduled drafts are due right now.")
     raise SystemExit(0)
 
+# Implementation Note: 1-10 minute pacing (60-600s) as per user request to mimic human behavior.
 sent = []
 failed = []
-for row in rows:
+for i, row in enumerate(rows):
+    if i > 0:
+        sleep_time = random.uniform(60.0, 600.0)
+        print(f"Pacing: sleeping for {{sleep_time:.1f}}s...")
+        time.sleep(sleep_time)
+
     acc = {{"name": row["sender_name"], "address": row["sender_address"], "password": "", "daily_limit": 0}}
     try:
         from email_sender import _load_accounts
@@ -1245,7 +1359,7 @@ for row in rows:
             if known["address"] == row["sender_address"]:
                 acc = known
                 break
-        final_body = (row["message"] or "").rstrip() + "\\n\\n" + signature_block(acc, infer_language(row))
+        final_body = render_outreach_body(row["message"] or "", acc, infer_language(row))
         send_email(row["address"], row["subject"] or "", final_body, acc)
         mark_sent(conn, row["id"], acc.get("name", ""), acc.get("address", ""))
         sent.append(f"[{{row['id']}}] {{row['address']}} via {{acc['address']}}")
@@ -1262,6 +1376,8 @@ if failed:
         print(f"- {{line}}")
 """
     return _run_outreach_python(script)
+
+
 
 
 def send_queue_status(limit: int = 10) -> str:
@@ -1316,3 +1432,257 @@ print(f"Reply drafts prepared: {{prepared}}")
 print(f"Total replies: {stats['replies']} | Pending drafts: {stats['pending']}")
 """
     return _run_outreach_python(script)
+
+
+def test_send_lead(lead_id: int, recipient: str = "", clear_history: bool = True, sender_address: str = "") -> str:
+    """
+    Generate and immediately send an outreach email for a specific lead.
+    Bypasses the scheduled queue — use for testing and demos.
+    Wraps deterministic_test_lead_flow(send=True).
+    Requires BIZ_SAFE_MODE=0 (or equivalent) to actually send.
+    """
+    return deterministic_test_lead_flow(
+        lead_id=lead_id,
+        recipient=recipient,
+        clear_history=clear_history,
+        send=True,
+        sender_address=sender_address,
+    )
+
+
+def poll_replies_for_lead(lead_id: int) -> str:
+    """
+    Poll IMAP for new replies then return any replies stored for this lead.
+    Read-only — safe to call without approval.
+    """
+    script = f"""
+from reply_listener import poll_replies
+from storage.db import connect, init_outreach_tables
+from classifier import run_classifier
+
+logged = poll_replies()
+conn = connect()
+init_outreach_tables(conn)
+run_classifier(conn)
+
+rows = conn.execute(
+    '''
+    SELECT r.id, r.received_at, r.content, r.channel,
+           COALESCE(rc.label, 'unclassified') AS label
+    FROM replies r
+    LEFT JOIN reply_classification rc ON rc.reply_id = r.id
+    WHERE r.lead_id = ?
+    ORDER BY r.received_at DESC
+    LIMIT 5
+    ''',
+    ({int(lead_id)},)
+).fetchall()
+
+if not rows:
+    print(f"No replies found for lead {int(lead_id)} yet. (Logged {{logged}} new message(s) this poll)")
+else:
+    print(f"Replies for lead {int(lead_id)} ({{len(rows)}} found, {{logged}} new this poll):")
+    for r in rows:
+        snippet = " ".join((r["content"] or "").split())[:200]
+        print(f"")
+        print(f"[{{r['label']}}] {{r['received_at'][:19]}} via {{r['channel']}}")
+        print(f"{{snippet}}")
+"""
+    return _run_outreach_python(script)
+
+
+def delete_draft(outreach_id: int) -> str:
+    """Delete a pending outreach draft by ID. Only works on status=pending drafts."""
+    conn = _conn()
+    row = conn.execute("SELECT status, lead_id FROM outreach_log WHERE id=?", (outreach_id,)).fetchone()
+    if not row:
+        return f"Draft [{outreach_id}] not found."
+    if row["status"] not in ("pending", "approved"):
+        return f"Draft [{outreach_id}] has status '{row['status']}' — can only delete pending/approved drafts."
+    conn.execute("DELETE FROM outreach_log WHERE id=?", (outreach_id,))
+    conn.commit()
+    return f"Deleted draft [{outreach_id}]."
+
+
+def quality_check_send(draft_ids: list[int], target_email: str) -> str:
+    """Send a preview copy of the listed outreach drafts to a test email address for quality assurance."""
+    from outreach.storage.db import connect, init_outreach_tables
+    from outreach.email_sender import send_email, _load_accounts, render_outreach_body
+    
+    conn = connect()
+    init_outreach_tables(conn)
+    accounts = {acc["address"]: acc for acc in _load_accounts()}
+    
+    results = []
+    for draft_id in draft_ids:
+        row = conn.execute(
+            "SELECT id, lead_id, subject, message, sender_name, sender_address "
+            "FROM outreach_log WHERE id = ?", (int(draft_id),)
+        ).fetchone()
+        
+        if not row:
+            results.append(f"Draft [{draft_id}] not found.")
+            continue
+            
+        lead_row = conn.execute("SELECT language FROM website_data WHERE business_id = ? ORDER BY id DESC LIMIT 1", (row["lead_id"],)).fetchone()
+        lang = lead_row["language"] if lead_row and lead_row["language"] else "en"
+        
+        acc = accounts.get(row["sender_address"])
+        if not acc:
+            results.append(f"Draft [{draft_id}] sender account '{row['sender_address']}' not found. Cannot send quality check.")
+            continue
+            
+        full_body = render_outreach_body(row["message"], acc, lang)
+        subject_str = f"[QUALITY CHECK] {row['subject']}"
+        
+        try:
+            send_email(target_email, subject_str, full_body, acc)
+            results.append(f"Draft [{draft_id}] successfully sent quality check preview to {target_email} via {acc['address']}.")
+        except Exception as e:
+            results.append(f"Draft [{draft_id}] failed quality check send: {e}")
+            
+    return "\n".join(results)
+
+
+def update_draft(outreach_id: int, body: str = "", subject: str = "") -> str:
+    """Edit the body and/or subject of a pending outreach draft before it's sent."""
+    conn = _conn()
+    row = conn.execute("SELECT status FROM outreach_log WHERE id=?", (outreach_id,)).fetchone()
+    if not row:
+        return f"Draft [{outreach_id}] not found."
+    if row["status"] not in ("pending", "approved"):
+        return f"Draft [{outreach_id}] has status '{row['status']}' — can only edit pending/approved drafts."
+    updates = {}
+    if body:
+        updates["message"] = body
+    if subject:
+        updates["subject"] = subject
+    if not updates:
+        return "Nothing to update — provide body and/or subject."
+    set_sql = ", ".join(f"{k}=?" for k in updates)
+    conn.execute(f"UPDATE outreach_log SET {set_sql} WHERE id=?", [*updates.values(), outreach_id])
+    conn.commit()
+    return f"Updated draft [{outreach_id}]: {', '.join(updates.keys())} changed."
+
+
+def dismiss_reply(reply_id: int) -> str:
+    """Mark a reply as notified and skip drafting — removes it from the action queue."""
+    conn = _conn()
+    row = conn.execute("SELECT id FROM replies WHERE id=?", (reply_id,)).fetchone()
+    if not row:
+        return f"Reply [{reply_id}] not found."
+    conn.execute("UPDATE replies SET notified=1 WHERE id=?", (reply_id,))
+    # Mark draft as skipped if one exists
+    conn.execute(
+        "UPDATE reply_drafts SET status='skipped' WHERE reply_id=? AND status IN ('pending','draft')",
+        (reply_id,),
+    )
+    conn.commit()
+    return f"Reply [{reply_id}] dismissed — removed from action queue."
+
+
+def update_reply_draft(reply_id: int, body: str = "", subject: str = "") -> str:
+    """Edit the body and/or subject of a reply draft before sending."""
+    conn = _conn()
+    row = conn.execute("SELECT id FROM reply_drafts WHERE reply_id=?", (reply_id,)).fetchone()
+    if not row:
+        return f"No draft found for reply [{reply_id}]."
+    updates = {}
+    if body:
+        updates["body"] = body
+    if subject:
+        updates["subject"] = subject
+    if not updates:
+        return "Nothing to update — provide body and/or subject."
+    set_sql = ", ".join(f"{k}=?" for k in updates)
+    conn.execute(f"UPDATE reply_drafts SET {set_sql} WHERE reply_id=?", [*updates.values(), reply_id])
+    conn.commit()
+    return f"Updated reply draft for reply [{reply_id}]: {', '.join(updates.keys())} changed."
+
+
+def generate_draft_for_lead(lead_id: int, sender_address: str = "", recipient: str = "") -> str:
+    """
+    Generate a single outreach draft for a specific lead, with explicit sender control.
+    sender_address: which account to send from (e.g. 'victor.brusnyak@gmail.com')
+    recipient: override the to-address (useful for test sends)
+    Returns the draft ID and a full preview including sign-off.
+    """
+    from outreach.email_sender import _load_accounts, pick_account
+    from outreach.generator import generate_email
+    from outreach.storage.db import connect, init_outreach_tables, log_outreach
+
+    conn = connect()
+    init_outreach_tables(conn)
+
+    # Load lead from leadgen DB (same file as outreach DB)
+    row = conn.execute(
+        """
+        SELECT b.id, b.name, b.category, b.address, b.website, b.phone, b.email_maps,
+               COALESCE(b.target_niche,'') AS target_niche,
+               COALESCE(b.top_gap,'') AS top_gap,
+               COALESCE(b.top_opportunity,'') AS top_opportunity,
+               COALESCE(b.gap_profile,'') AS gap_profile,
+               COALESCE(b.opportunity_profile,'') AS opportunity_profile,
+               COALESCE(b.brand_summary,'') AS brand_summary,
+               COALESCE(b.pain_point_guess,'') AS pain_point_guess,
+               COALESCE(b.outreach_angle,'') AS outreach_angle,
+               COALESCE(b.apparent_size,'') AS apparent_size,
+               COALESCE(b.digital_maturity,'') AS digital_maturity,
+               COALESCE(b.contact_name,'') AS contact_name,
+               COALESCE(b.pipeline_stage,'lead') AS pipeline_stage,
+               COALESCE(w.emails,'') AS site_emails,
+               COALESCE(w.socials,'') AS socials,
+               COALESCE(NULLIF(TRIM(w.language),''),'en') AS language
+        FROM businesses b
+        LEFT JOIN website_data w ON w.id = (SELECT MAX(id) FROM website_data WHERE business_id=b.id)
+        WHERE b.id = ?
+        """,
+        (lead_id,),
+    ).fetchone()
+    if not row:
+        return f"Lead {lead_id} not found."
+
+    lead = dict(row)
+
+    # Resolve sender
+    accounts = {acc["address"]: acc for acc in _load_accounts()}
+    if sender_address:
+        acc = accounts.get(sender_address.strip())
+        if acc is None:
+            return f"Sender account {sender_address!r} not found. Available: {list(accounts.keys())}"
+    else:
+        acc = pick_account(conn)
+    if acc is None:
+        return "No sender account available."
+
+    # Resolve recipient
+    emails = (lead.get("site_emails") or lead.get("email_maps") or "").split(",")
+    to_addr = (recipient or "").strip() or next((e.strip() for e in emails if "@" in e), "")
+    if not to_addr:
+        return f"Lead {lead_id} has no email address."
+
+    # Generate draft
+    draft = generate_email(lead, account=acc)
+    draft_id = log_outreach(
+        conn, lead_id, "email", to_addr, draft["body"], draft["subject"],
+        status="pending", message_variant_fingerprint=draft.get("fingerprint", ""),
+    )
+    conn.execute(
+        "UPDATE outreach_log SET sender_name=?, sender_address=? WHERE id=?",
+        (acc.get("name", ""), acc.get("address", ""), draft_id),
+    )
+    conn.commit()
+
+    from outreach.email_sender import render_outreach_body
+
+    lang = lead.get("language", "en")
+    full_body = render_outreach_body(draft["body"], acc, lang)
+
+    return "\n".join([
+        f"Draft [{draft_id}] created.",
+        f"To: {to_addr}",
+        f"From: {acc['name']} <{acc['address']}>",
+        f"Subject: {draft['subject']}",
+        "",
+        full_body,
+    ])

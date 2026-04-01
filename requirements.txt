@@ -1,3 +1,13 @@
+# Pydantic AI Agent Framework (replacing MCP)
+pydantic-ai>=0.0.19
+pydantic>=2.0.0
+
+# OpenRouter API
 openai>=1.0.0
+
+# HTTP client for Telegram/WhatsApp APIs
+aiohttp>=3.9.0
+
 python-dotenv>=1.0.0
 duckduckgo-search>=6.0.0
+smolagents>=1.8.0
