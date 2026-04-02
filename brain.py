@@ -42,6 +42,9 @@ _PROJECT_SUMMARY = "\n".join(
     if line.strip() and not line.startswith("```") and len(line) < 200
 )[:2000]  # cap at 2000 chars
 
+# Victor persona spec location (updated after reorganization)
+VICTOR_SPEC = BIZ_ROOT / "persona" / "victor" / "spec.md"
+
 def _chat(messages: list, tools: list = None, max_tokens: int = 2000) -> object:
     """Try shared remote providers and keep the core agent off local inference."""
     return create_chat_completion(
@@ -922,6 +925,51 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "outreach_trades_demo_status",
+            "description": "Show the status of the trades demo workflow, including inquiries and durable job state.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "default": 10},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "outreach_run_trades_demo",
+            "description": "Run the trades demo cycle: poll the demo inbox, process new inquiries, and optionally send replies.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "default": 10},
+                    "since_days": {"type": "integer", "default": 14},
+                    "send_response": {"type": "boolean", "default": False},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "outreach_simulate_trades_demo_inquiry",
+            "description": "Create a simulated trades demo inquiry to test the end-to-end workflow without a real inbound email.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "from_email": {"type": "string"},
+                    "from_name": {"type": "string", "default": "Demo Prospect"},
+                    "subject": {"type": "string"},
+                    "body": {"type": "string"},
+                },
+                "required": ["from_email", "subject", "body"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "content_report",
             "description": "Show Victor content queue and planning summary.",
             "parameters": {"type": "object", "properties": {}},
@@ -1491,6 +1539,21 @@ def _dispatch(name: str, args: dict) -> str:
             )
         elif name == "outreach_poll_replies_for_lead":
             return outreach.poll_replies_for_lead(args["lead_id"])
+        elif name == "outreach_trades_demo_status":
+            return outreach.trades_demo_status(args.get("limit", 10))
+        elif name == "outreach_run_trades_demo":
+            return outreach.run_trades_demo(
+                args.get("limit", 10),
+                args.get("since_days", 14),
+                args.get("send_response", False),
+            )
+        elif name == "outreach_simulate_trades_demo_inquiry":
+            return outreach.simulate_trades_demo_inquiry(
+                args["from_email"],
+                args["subject"],
+                args["body"],
+                args.get("from_name", "Demo Prospect"),
+            )
         elif name == "content_report":
             return content.report()
         elif name == "content_plan_posts":
@@ -1760,6 +1823,9 @@ _TOOL_LABELS = {
     "outreach_send_reply_drafts":("📤", "Sending reply drafts"),
     "outreach_internal_reply_test":("🧪", "Running internal reply test"),
     "outreach_internal_reply_test_status":("🔎", "Checking reply test status"),
+    "outreach_trades_demo_status":("🧰", "Checking trades demo"),
+    "outreach_run_trades_demo":("🏃", "Running trades demo"),
+    "outreach_simulate_trades_demo_inquiry":("🧪", "Simulating trades demo inquiry"),
     # research
     "research_niche_overview":  ("🗺", "Loading niche overview"),
     "research_findings_summary":("📰", "Fetching research findings"),
@@ -1836,6 +1902,7 @@ _TOOL_ARG_HINTS = {
     "outreach_send_review_batch": lambda a: a.get("recipient", ""),
     "outreach_test_send_lead":    lambda a: f"lead={a.get('lead_id', '?')} → {a.get('recipient', 'lead email')}",
     "outreach_poll_replies_for_lead": lambda a: f"lead={a.get('lead_id', '?')}",
+    "outreach_simulate_trades_demo_inquiry": lambda a: a.get("from_email", ""),
     "research_niche_report":lambda a: a.get("niche", ""),
     "research_update_niche":lambda a: a.get("niche", ""),
     "research_ingest_finding": lambda a: a.get("niche", ""),
@@ -1881,6 +1948,8 @@ _TOOL_NAMES_BY_GROUP = {
                  "outreach_send_reply_drafts", "outreach_poll_and_classify_replies",
                  "outreach_internal_reply_test", "outreach_internal_reply_test_status",
                  "outreach_test_send_lead", "outreach_poll_replies_for_lead",
+                 "outreach_trades_demo_status", "outreach_run_trades_demo",
+                 "outreach_simulate_trades_demo_inquiry",
                  "outreach_quality_check_send", "outreach_delete_draft", "outreach_update_draft",
                  "outreach_dismiss_reply", "outreach_update_reply_draft",
                  "outreach_draft_for_lead"},

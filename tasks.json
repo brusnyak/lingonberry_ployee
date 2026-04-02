@@ -1,1 +1,195 @@
-[]
+[
+  {
+    "id": "rev-001",
+    "description": "Run AU/UK trades leadgen batch and collect 60 qualified leads with valid email + reachable site.",
+    "kind": "pipeline",
+    "priority": 10,
+    "status": "pending",
+    "approval_mode": "internal_only",
+    "allowed_actions": [
+      "internal_safe"
+    ],
+    "goal": "Run AU/UK trades leadgen batch and collect 60 qualified leads with valid email + reachable site.",
+    "objective": "Run AU/UK trades leadgen batch and collect 60 qualified leads with valid email + reachable site.",
+    "result": null,
+    "artifacts": {},
+    "stop_conditions": [
+      "ask_when_blocked"
+    ],
+    "outputs_expected": [],
+    "status_summary": "",
+    "blockers": [],
+    "required_approvals": [],
+    "pending_access": [],
+    "attempts": 0,
+    "max_attempts": 3,
+    "retry_count": 0,
+    "next_run_at": "2026-04-02T11:56:33.908375+00:00",
+    "created_at": "2026-04-02T11:56:33.908375+00:00",
+    "updated_at": "2026-04-02T11:56:33.908375+00:00",
+    "lease_expires_at": null,
+    "owner": null,
+    "last_error": null
+  },
+  {
+    "id": "rev-002",
+    "description": "Validate/enrich all newly scraped leads and drop weak/no-email/no-site leads before drafting.",
+    "kind": "pipeline",
+    "priority": 12,
+    "status": "pending",
+    "approval_mode": "internal_only",
+    "allowed_actions": [
+      "internal_safe"
+    ],
+    "goal": "Validate/enrich all newly scraped leads and drop weak/no-email/no-site leads before drafting.",
+    "objective": "Validate/enrich all newly scraped leads and drop weak/no-email/no-site leads before drafting.",
+    "result": null,
+    "artifacts": {},
+    "stop_conditions": [
+      "ask_when_blocked"
+    ],
+    "outputs_expected": [],
+    "status_summary": "",
+    "blockers": [],
+    "required_approvals": [],
+    "pending_access": [],
+    "attempts": 0,
+    "max_attempts": 3,
+    "retry_count": 0,
+    "next_run_at": "2026-04-02T11:56:33.908493+00:00",
+    "created_at": "2026-04-02T11:56:33.908493+00:00",
+    "updated_at": "2026-04-02T11:56:33.908493+00:00",
+    "lease_expires_at": null,
+    "owner": null,
+    "last_error": null
+  },
+  {
+    "id": "rev-003",
+    "description": "Rewrite trades touch-1 copy to short value-first variants (no opening with 'I') for AU and UK.",
+    "kind": "copy",
+    "priority": 14,
+    "status": "pending",
+    "approval_mode": "internal_only",
+    "allowed_actions": [
+      "internal_safe"
+    ],
+    "goal": "Rewrite trades touch-1 copy to short value-first variants (no opening with 'I') for AU and UK.",
+    "objective": "Rewrite trades touch-1 copy to short value-first variants (no opening with 'I') for AU and UK.",
+    "result": null,
+    "artifacts": {},
+    "stop_conditions": [
+      "ask_when_blocked"
+    ],
+    "outputs_expected": [],
+    "status_summary": "",
+    "blockers": [],
+    "required_approvals": [],
+    "pending_access": [],
+    "attempts": 0,
+    "max_attempts": 3,
+    "retry_count": 0,
+    "next_run_at": "2026-04-02T11:56:33.908503+00:00",
+    "created_at": "2026-04-02T11:56:33.908503+00:00",
+    "updated_at": "2026-04-02T11:56:33.908503+00:00",
+    "lease_expires_at": null,
+    "owner": null,
+    "last_error": null
+  },
+  {
+    "id": "rev-004",
+    "description": "Generate 20 drafts from validated leads and send 10 today through review-gated flow from Egor identity.",
+    "kind": "outreach",
+    "priority": 16,
+    "status": "pending",
+    "approval_mode": "approval_required",
+    "allowed_actions": [
+      "internal_safe",
+      "approval_required"
+    ],
+    "goal": "Generate 20 drafts from validated leads and send 10 today through review-gated flow from Egor identity.",
+    "objective": "Generate 20 drafts from validated leads and send 10 today through review-gated flow from Egor identity.",
+    "result": null,
+    "artifacts": {},
+    "stop_conditions": [
+      "ask_when_blocked"
+    ],
+    "outputs_expected": [],
+    "status_summary": "",
+    "blockers": [],
+    "required_approvals": [],
+    "pending_access": [],
+    "attempts": 0,
+    "max_attempts": 3,
+    "retry_count": 0,
+    "next_run_at": "2026-04-02T11:56:33.908511+00:00",
+    "created_at": "2026-04-02T11:56:33.908511+00:00",
+    "updated_at": "2026-04-02T11:56:33.908511+00:00",
+    "lease_expires_at": null,
+    "owner": null,
+    "last_error": null
+  },
+  {
+    "id": "rev-005",
+    "description": "Build social outreach queue from same leads (IG/FB where available) with 1-line personalized opener per lead.",
+    "kind": "outreach",
+    "priority": 18,
+    "status": "pending",
+    "approval_mode": "internal_only",
+    "allowed_actions": [
+      "internal_safe"
+    ],
+    "goal": "Build social outreach queue from same leads (IG/FB where available) with 1-line personalized opener per lead.",
+    "objective": "Build social outreach queue from same leads (IG/FB where available) with 1-line personalized opener per lead.",
+    "result": null,
+    "artifacts": {},
+    "stop_conditions": [
+      "ask_when_blocked"
+    ],
+    "outputs_expected": [],
+    "status_summary": "",
+    "blockers": [],
+    "required_approvals": [],
+    "pending_access": [],
+    "attempts": 0,
+    "max_attempts": 3,
+    "retry_count": 0,
+    "next_run_at": "2026-04-02T11:56:33.908523+00:00",
+    "created_at": "2026-04-02T11:56:33.908523+00:00",
+    "updated_at": "2026-04-02T11:56:33.908523+00:00",
+    "lease_expires_at": null,
+    "owner": null,
+    "last_error": null
+  },
+  {
+    "id": "rev-006",
+    "description": "Report daily conversion metrics: sent, replies, positive replies, meetings booked; cut non-performing variants immediately.",
+    "kind": "ops",
+    "priority": 20,
+    "status": "pending",
+    "approval_mode": "internal_only",
+    "allowed_actions": [
+      "internal_safe"
+    ],
+    "goal": "Report daily conversion metrics: sent, replies, positive replies, meetings booked; cut non-performing variants immediately.",
+    "objective": "Report daily conversion metrics: sent, replies, positive replies, meetings booked; cut non-performing variants immediately.",
+    "result": null,
+    "artifacts": {},
+    "stop_conditions": [
+      "ask_when_blocked"
+    ],
+    "outputs_expected": [],
+    "status_summary": "",
+    "blockers": [],
+    "required_approvals": [],
+    "pending_access": [],
+    "attempts": 0,
+    "max_attempts": 3,
+    "retry_count": 0,
+    "next_run_at": "2026-04-02T11:56:33.908531+00:00",
+    "created_at": "2026-04-02T11:56:33.908531+00:00",
+    "updated_at": "2026-04-02T11:56:33.908531+00:00",
+    "lease_expires_at": null,
+    "owner": null,
+    "last_error": null
+  }
+]

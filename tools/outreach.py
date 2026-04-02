@@ -1292,7 +1292,12 @@ for row in rows:
         continue
     try:
         seed = random.randint(1000, 999999)
-        send_after = next_send_after(conn, acc["address"], jitter_seed=seed).isoformat()
+        send_after = next_send_after(
+            conn,
+            acc["address"],
+            jitter_seed=seed,
+            lead_address=row["business_address"] or row["website"] or "",
+        ).isoformat()
         mark_scheduled(conn, row["id"], acc.get("name", ""), acc.get("address", ""), send_after, seed)
         scheduled.append(f"[{{row['id']}}] {{row['address']}} via {{acc['address']}} at {{send_after}}")
     except Exception as e:
@@ -1489,6 +1494,105 @@ else:
         print(f"{{snippet}}")
 """
     return _run_outreach_python(script)
+
+
+def trades_demo_status(limit: int = 10) -> str:
+    from outreach.trades_demo import trades_demo_status as _status
+
+    data = _status(limit=limit)
+    stats = data["stats"]
+    lines = [
+        "Trades demo status",
+        f"- inquiries: {stats['total']} total | {stats['new_count']} new | {stats.get('pending_approval_count', 0)} pending approval | {stats['qualified_count']} qualified | {stats['booked_count']} booked | {stats['failed_count']} failed",
+        f"- jobs: {stats['total_jobs']} total | {stats['completed_jobs']} completed | {stats['manual_jobs']} manual | {stats['failed_jobs']} failed",
+    ]
+    for row in data["inquiries"][:limit]:
+        lines.append(
+            f"- [inquiry {row['id']}] {row['from_address']} | {row['status']} | approval={row.get('approval_status') or 'n/a'} | job={row['job_type'] or 'unknown'} | booking={row['booking_status'] or 'n/a'}"
+        )
+    return "\n".join(lines)
+
+
+def run_trades_demo(limit: int = 10, since_days: int = 14, send_response: bool = False, require_approval: bool = True) -> str:
+    from outreach.trades_demo import run_trades_demo_cycle
+
+    result = run_trades_demo_cycle(
+        limit=limit,
+        since_days=since_days,
+        send_response=send_response,
+        require_approval=require_approval,
+    )
+    return (
+        "Trades demo cycle complete.\n"
+        f"- added: {result['added']}\n"
+        f"- processed: {result['processed']}\n"
+        f"- failed: {result['failed']}"
+    )
+
+
+def simulate_trades_demo_inquiry(from_email: str, subject: str, body: str, from_name: str = "Demo Prospect") -> str:
+    from outreach.trades_demo import simulate_demo_inquiry
+
+    inquiry_id = simulate_demo_inquiry(
+        from_email=from_email,
+        from_name=from_name,
+        subject=subject,
+        body=body,
+    )
+    return f"Created trades demo inquiry {inquiry_id} for {from_email}"
+
+
+def run_trades_demo_approval(inquiry_id: int, send_response: bool = True) -> str:
+    from outreach.trades_demo import approve_demo_inquiry
+
+    result = approve_demo_inquiry(inquiry_id, send_response=send_response)
+    return (
+        f"Approved trades demo inquiry {inquiry_id}.\n"
+        f"- status: {result['status']}\n"
+        f"- booking: {result['booking'].get('status', 'n/a')}\n"
+        f"- mode: {result['booking'].get('mode', 'n/a')}"
+    )
+
+
+def run_trades_demo_approval_all(limit: int = 20, send_response: bool = True) -> str:
+    from outreach.trades_demo import approve_all_demo_inquiries
+
+    result = approve_all_demo_inquiries(limit=limit, send_response=send_response)
+    blocked = result.get("blocked")
+    if blocked:
+        return f"Bulk approval blocked.\n- reason: {blocked}"
+    lines = [
+        "Approved all staged trades demo inquiries.",
+        f"- approved: {len(result['approved'])}",
+        f"- failed: {len(result['failed'])}",
+    ]
+    for inquiry_id in result["approved"]:
+        lines.append(f"  - inquiry {inquiry_id}")
+    for item in result["failed"]:
+        lines.append(f"  - failed {item}")
+    return "\n".join(lines)
+
+
+def reject_trades_demo_inquiry(inquiry_id: int, reason: str = "") -> str:
+    from outreach.trades_demo import reject_demo_inquiry
+
+    result = reject_demo_inquiry(inquiry_id, reason=reason)
+    return f"Rejected trades demo inquiry {inquiry_id}. Status: {result['status']}"
+
+
+def edit_trades_demo_inquiry(inquiry_id: int, response_body: str, response_subject: str = "") -> str:
+    from outreach.trades_demo import edit_demo_inquiry_response
+
+    result = edit_demo_inquiry_response(
+        inquiry_id,
+        response_body=response_body,
+        response_subject=response_subject,
+    )
+    return (
+        f"Edited trades demo inquiry {inquiry_id}.\n"
+        f"- status: {result['status']}\n"
+        f"- subject: {result['response_subject']}"
+    )
 
 
 def delete_draft(outreach_id: int) -> str:

@@ -21,7 +21,27 @@ from outreach.storage.db import (
     log_classification, get_reply_queue_needing_action
 )
 from outreach.classifier import classify_reply
-from agent.pydantic_ai_agent import ReplyClassifier, DraftGenerator
+# ReplyClassifier and DraftGenerator are stubs — actual classification uses outreach.classifier
+# and draft generation uses the outreach generator module directly.
+class ReplyClassifier:
+    """Stub — actual classification is done via outreach.classifier.classify_reply()"""
+    pass
+
+class DraftGenerator:
+    """Stub — actual draft generation uses outreach.generator.generate_email()"""
+    def generate(self, lead_name, lead_info, inbound_message, classification, conversation_history):
+        from outreach.generator import generate_email
+        lead = {
+            "name": lead_name,
+            "target_niche": lead_info.get("niche", ""),
+            "category": lead_info.get("category", ""),
+            "outreach_angle": lead_info.get("outreach_angle", ""),
+        }
+        result = generate_email(lead)
+        return {
+            "body": result["body"],
+            "rationale": f"Auto-generated draft for {classification} reply"
+        }
 
 # Telegram bot for notifications (lazy import to avoid circular deps)
 bot = None

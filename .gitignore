@@ -5,3 +5,4 @@ memory.json
 .DS_Store
 *.json
 *.jsonl
+secrets/
